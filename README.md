@@ -1,27 +1,80 @@
-# Prompt Compose
+# voicekey
 
-An offline desktop app for managing prompt snippets — built with Tauri v2 and SvelteKit.
+Hotkey-triggered local speech-to-text. Press a key, speak, get text you can paste.
+Runs entirely on your machine — nothing is uploaded.
 
-## What it is
+> **Status: early.** The scaffold, tooling, and packaging are in place. The
+> inference engine is next. See [`STATE.md`](STATE.md) for the full design and
+> every decision made so far.
 
-- **A snippet is a Markdown file.** Its filename (minus `.md`) is its name; the file's whole content is the prompt. No database, no schema, no ids — the filesystem is the source of truth.
-- **A project is a folder.** Point Prompt Compose at any folder and every `*.md` inside it, recursively, becomes a snippet. Because your library is just Markdown files in a folder, you can keep it in your own git repo and read the diffs.
-- **Variables are Python-style format strings.** Write `{name}` anywhere in a snippet and it becomes a fillable variable — uniformly, code fences included. Double the braces (`{{`, `}}`) to emit a literal brace, exactly as in Python. There is no special protocol to learn.
-- **Compose, fill, copy.** Insert snippets into a compose box, fill their variables once (a repeated variable shares one value), and copy the assembled prompt.
-- **Offline by design.** Your prompts never leave your machine: the app **only ever fetches, never sends**, and nothing you write is uploaded anywhere. It makes exactly two kinds of network request, neither of which its core job depends on. An optional semantic-match model improves result ranking; it downloads silently in the background and its absence only falls back to instant lexical match. And it checks for its own updates on launch — those artifacts are cryptographically signed, so you can trust they came from this project. Offline forever still works: both simply fail quietly.
+## What it does
 
-The app owns nothing inside your project folders. The project roster, the active project, usage timestamps, and the (rebuildable) embedding cache all live under `~/.prompt-compose` — never written into your git-tracked prompt files.
+Press the hotkey → a small popup appears and recording starts immediately →
+stop → the transcription appears, ready to copy.
 
-## The contracts
+That is the whole product. No prompt library, no history, no settings sprawl.
 
-Two living design docs govern the product:
+## How it works
 
-- [`project_docs/prompts-design.md`](project_docs/prompts-design.md) — the engineering contract: storage model, the snippet/project data model, the command surface, and the hybrid match engine.
-- [`project_docs/prompts-ux.md`](project_docs/prompts-ux.md) — the interaction design, scenario by scenario.
+Whisper `large-v3-turbo` driven directly through ONNX Runtime at the graph level —
+log-mel spectrogram, encoder, then a KV-cached autoregressive decode loop. There is
+no wrapper library between the app and the model, which is deliberate: it is about
+250 lines and it is the interesting part.
+
+GPU is used when available and falls back to CPU automatically. The execution
+provider is probed at runtime, not assumed at install time:
+
+| Platform | Accelerator | Weights |
+|---|---|---|
+| Linux / Windows + NVIDIA | CUDA | fp16 |
+| macOS (Apple Silicon) | CoreML | fp16 |
+| anything else | CPU | int8 |
+
+## Install
+
+Download the artifact for your platform from Releases and run it — no Python, no
+pip, no system packages.
+
+On first run it downloads the speech model (~1.0 GB) into your platform's data
+directory. If an NVIDIA GPU is detected it offers to fetch the CUDA runtime too.
 
 ## Development
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and the verify commands.
+Requires [uv](https://docs.astral.sh/uv/). It manages the Python interpreter and
+Tk, so there is nothing else to install — except PortAudio on Linux:
+
+```sh
+sudo apt install libportaudio2      # Linux only, build/dev requirement
+uv sync --dev
+uv run voicekey
+```
+
+Checks:
+
+```sh
+uv run ruff check .
+uv run ruff format --check .
+uv run pytest
+```
+
+Frozen build (what CI produces):
+
+```sh
+uv run pyinstaller --noconfirm --clean --name voicekey --windowed \
+  --collect-binaries sounddevice src/voicekey/__main__.py
+```
+
+## Layout
+
+```
+src/voicekey/
+  backend.py   execution-provider probe → providers + quantization
+  paths.py     per-OS model/data locations
+  ui.py        the popup (tkinter, behind a 4-method interface)
+  __main__.py  entry point
+salvage/       distilled notes from the previous Tauri/Rust app
+STATE.md       design decisions, open questions, machine facts
+```
 
 ## License
 

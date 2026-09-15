@@ -1,0 +1,67 @@
+name: Build
+
+# Frozen, zero-dependency artifacts. Users download one file and run it --
+# no Python, no pip, no system packages. Models are NOT bundled (1-2GB);
+# they are fetched on first run into the platformdirs data dir.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # NOTE: building on ubuntu-latest links against that runner's glibc,
+          # so the artifact needs a reasonably recent distro. If wider distro
+          # support is ever needed, move this leg into a manylinux container.
+          - os: ubuntu-latest
+            target: linux-x86_64
+          - os: macos-latest
+            target: macos-arm64
+          - os: windows-latest
+            target: windows-x86_64
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+
+      # PyInstaller's sounddevice hook collects the *system* libportaudio on
+      # Linux and copies it into the bundle -- so this apt package is a build
+      # requirement only. End users install nothing.
+      - name: Install PortAudio (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libportaudio2
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - run: uv sync --dev
+
+      - name: Freeze
+        run: >
+          uv run pyinstaller
+          --noconfirm --clean
+          --name voicekey
+          --windowed
+          --collect-binaries sounddevice
+          src/voicekey/__main__.py
+
+      - name: Package
+        shell: bash
+        run: |
+          cd dist
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            7z a "../voicekey-${{ matrix.target }}.zip" voicekey
+          else
+            tar czf "../voicekey-${{ matrix.target }}.tar.gz" voicekey*
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: voicekey-${{ matrix.target }}
+          path: voicekey-${{ matrix.target }}.*
+          if-no-files-found: error
