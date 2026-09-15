@@ -50,14 +50,15 @@ def main() -> int:
         state["model"] = model
         popup.set_backend(model.backend.label)
         popup.set_state("idle")
-        popup.set_text("Ready. Press Record or hit Space.")
+        popup.set_text("Press Space to start recording.")
 
     def transcribe(samples) -> None:
         model: Whisper = state["model"]  # type: ignore[assignment]
         try:
             result = model.transcribe(samples)
-            text = result.text or "(nothing heard)"
-            popup.set_text(text)
+            # Empty means the silence gate rejected it (voicekey.vad) -- say so
+            # rather than showing a blank box that looks like a failure.
+            popup.set_text(result.text or "No speech detected.")
             popup.set_state("done" if result.text else "idle")
         except Exception as exc:  # surfaced in the box, never swallowed
             popup.set_text(f"Transcription failed: {exc}")
