@@ -40,6 +40,14 @@ cuda = [
 # PyPI names of the same packages are redirect stubs).
 extra-index-url = ["https://pypi.nvidia.com"]
 
+# The UI is tkinter, and uv's own managed builds are the thing that guarantees
+# Tk is present -- that is why tkinter was chosen over GTK4 in the first place.
+# A system interpreter satisfies `requires-python` just as well but may have no
+# Tk at all: Homebrew's python@3.14 splits it into a separate python-tk
+# formula, so `import tkinter` fails with ModuleNotFoundError: _tkinter.
+# Pinning to managed builds makes the guarantee real instead of incidental.
+python-preference = "only-managed"
+
 [project.scripts]
 voicekey = "voicekey.__main__:main"
 
