@@ -16,9 +16,29 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Linux/Windows x86_64 only. Kept out of the base install so the CPU build
-# stays small and works everywhere; see STATE.md "Provider is a runtime probe".
-cuda = ["onnxruntime-gpu>=1.20"]
+# Linux/Windows x86_64 only, and ~2GB installed. Kept out of the base install
+# so the CPU build stays small and works everywhere.
+#
+# onnxruntime-gpu does NOT bundle the CUDA runtime -- its provider .so links
+# against cuBLAS/cuDNN/cuRAND and, when they are missing, ONNX Runtime falls
+# back to CPU *silently*. So the runtime libraries are pinned here explicitly
+# rather than left to the user. They live on NVIDIA's index (see [tool.uv]),
+# and voicekey.cuda dlopens them at startup because ORT 1.30 does not search
+# CUDA 13's nvidia/cu13/lib layout.
+cuda = [
+    "onnxruntime-gpu>=1.30",
+    "nvidia-cudnn-cu13>=9.26",
+    "nvidia-cuda-runtime>=13.4",
+    "nvidia-curand>=10.4",
+    "nvidia-cufft>=12.4",
+    "nvidia-cusparse>=12.8",
+    "nvidia-cusolver>=12.3",
+]
+
+[tool.uv]
+# nvidia-cublas and friends for CUDA 13 are published here, not on PyPI (the
+# PyPI names of the same packages are redirect stubs).
+extra-index-url = ["https://pypi.nvidia.com"]
 
 [project.scripts]
 voicekey = "voicekey.__main__:main"

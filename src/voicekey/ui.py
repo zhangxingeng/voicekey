@@ -15,11 +15,12 @@ import tkinter as tk
 from collections.abc import Callable
 from typing import Literal
 
-State = Literal["idle", "recording", "transcribing", "done", "error"]
+State = Literal["loading", "idle", "recording", "transcribing", "done", "error"]
 
 # Status dot colour + caption per state. The dot is the primary cue; the
 # caption is there for the states where colour alone is ambiguous.
 _CUES: dict[State, tuple[str, str]] = {
+    "loading": ("#5a5f6a", "Loading model"),
     "idle": ("#5a5f6a", "Ready"),
     "recording": ("#e5484d", "Recording"),
     "transcribing": ("#f5a524", "Transcribing..."),
@@ -58,9 +59,10 @@ class Popup:
         )
         self._caption.pack(side="left", padx=(8, 0))
 
-        tk.Label(header, text=backend_label, bg=_BG, fg=_MUTED, font=("TkDefaultFont", 9)).pack(
-            side="right"
+        self._backend = tk.Label(
+            header, text=backend_label, bg=_BG, fg=_MUTED, font=("TkDefaultFont", 9)
         )
+        self._backend.pack(side="right")
 
         self._text = tk.Text(
             self.root,
@@ -113,9 +115,22 @@ class Popup:
         self.root.bind("<space>", lambda _e: self._on_toggle())
         self.root.bind("<Escape>", lambda _e: self.root.quit())
 
-    # -- the four-method interface a different toolkit would have to satisfy --
+    # -- the interface a different toolkit would have to satisfy -------------
+    #
+    # All of these are called from worker threads (model loading, decoding).
+    # Tk is not thread-safe, so every mutation is marshalled onto the main
+    # thread via `after`, which is the one cross-thread call Tk does support.
 
     def set_state(self, state: State) -> None:
+        self.root.after(0, self._apply_state, state)
+
+    def set_backend(self, label: str) -> None:
+        self.root.after(0, lambda: self._backend.configure(text=label))
+
+    def set_text(self, text: str) -> None:
+        self.root.after(0, self._apply_text, text)
+
+    def _apply_state(self, state: State) -> None:
         self._state = state
         colour, caption = _CUES[state]
         self._dot.itemconfigure(self._dot_id, fill=colour)
@@ -123,9 +138,8 @@ class Popup:
         self._toggle_btn.configure(
             text="Stop  (Space)" if state == "recording" else "Record  (Space)"
         )
-        self.root.update_idletasks()
 
-    def set_text(self, text: str) -> None:
+    def _apply_text(self, text: str) -> None:
         self._text.delete("1.0", "end")
         self._text.insert("1.0", text)
 

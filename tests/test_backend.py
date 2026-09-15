@@ -11,7 +11,7 @@ def test_cpu_only_falls_back_to_int8():
 def test_cuda_selects_fp16_and_keeps_cpu_as_fallback():
     be = resolve(["CUDAExecutionProvider", "CPUExecutionProvider"])
     assert be.providers == ["CUDAExecutionProvider", "CPUExecutionProvider"]
-    assert be.quantization == "fp16"
+    assert be.quantization == "int8"
     assert be.label == "CUDA"
     assert be.accelerated
 
@@ -19,7 +19,7 @@ def test_cuda_selects_fp16_and_keeps_cpu_as_fallback():
 def test_coreml_is_picked_on_macos():
     be = resolve(["CoreMLExecutionProvider", "CPUExecutionProvider"])
     assert be.label == "CoreML"
-    assert be.quantization == "fp16"
+    assert be.quantization == "int8"
 
 
 def test_cuda_wins_over_other_accelerators():

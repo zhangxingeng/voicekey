@@ -65,17 +65,9 @@ split-language architecture.
 no daemon imports anywhere in it. This is what makes a future Kotlin/Android port a
 rewrite of the shell rather than the brain — and it costs nothing now.
 
-**2. Provider is a runtime probe, never an install-time assumption.** Quantization
-follows from it.
-
-```python
-def pick_backend():
-    avail = ort.get_available_providers()
-    for ep in ("CUDAExecutionProvider", "CoreMLExecutionProvider", "DmlExecutionProvider"):
-        if ep in avail:
-            return [ep, "CPUExecutionProvider"], "fp16"
-    return ["CPUExecutionProvider"], "int8"
-```
+**2. Provider is a runtime probe, never an install-time assumption** — and the
+probe is confirmed against a live session, because ORT degrades to CPU silently.
+See `backend.resolve()` / `backend.confirm()` and finding #2 below.
 
 **3. Models are never packaged.** 1–2GB, downloaded on first run into a
 `platformdirs` location, sha256-verified before extraction. GPU runtime rides the
@@ -134,19 +126,54 @@ Why this export is unusually good for bare interfacing:
 
 ---
 
+## Spike results — the engine works (2026-09-15)
+
+Benchmarked on the JFK sample (11.0s, 16kHz mono), RTX 3090 Ti:
+
+| backend | decode | realtime factor |
+|---|---|---|
+| CPU int8 | 8.73s | 1.26x |
+| **CUDA int8** | **4.06s** | **2.71x** |
+
+Output is exact, punctuation included, language auto-detected:
+
+> And so, my fellow Americans, ask not what your country can do for you, ask
+> what you can do for your country.
+
+### Three findings that changed the design
+
+**1. int8-on-CUDA is fine — the fp16 plan was wrong.** The prediction was that
+ORT's CUDA EP would handle quantized ops so badly that int8-on-CUDA would be
+*slower* than int8-on-CPU. Measured, it is **2.15x faster**. So there is now
+**one int8 model for every backend**, which halves the first-run download and
+deletes a whole axis of configuration. Whether fp16 beats int8 on GPU is still
+untested and left as a later optimization.
+
+**2. ONNX Runtime falls back to CPU silently.** `get_available_providers()`
+reports what ORT was *built* with, not what it can load. With CUDA libraries
+missing it still listed `CUDAExecutionProvider`, then quietly bound CPU — right
+answers, 2x slower, only a stderr warning. **The UI must read
+`session.get_providers()` after construction**, never the pre-flight probe.
+`backend.confirm()` exists for exactly this.
+
+**3. `onnxruntime-gpu` does not bundle the CUDA runtime.** It needs cuBLAS,
+cuDNN 9, cuRAND, cuFFT, cuSPARSE, cuSOLVER — ~2GB. Two complications:
+- For CUDA 13 these live on **`https://pypi.nvidia.com`**, not PyPI (the PyPI
+  names are redirect stubs). Configured in `[tool.uv] extra-index-url`.
+- CUDA 13 changed the wheel layout to a shared **`nvidia/cu13/lib`**, which ORT
+  1.30 does not search. `voicekey/cuda.py` dlopens them with `RTLD_GLOBAL`
+  before session creation. Without it, CUDA silently never engages.
+
 ## Open questions
 
-1. **Does int8-on-CUDA actually work?** ORT's CUDA EP handles `MatMulInteger` /
-   `QuantizeLinear` poorly and may silently fall back to CPU per-node, making it
-   *slower* than pure CPU. This is why the fp16/int8 split exists. **Measure it.**
-2. **Does `onnxruntime-gpu` bundle CUDA/cuDNN or expect a system install?** It
-   resolved as a single package with no `nvidia-*` deps, which is ambiguous.
-   Determines whether GPU install is one command or "install CUDA toolkit first."
-3. **Wayland global hotkey.** Tauri-style global grabs don't work. Leading
+1. **Is fp16 faster than int8 on CUDA?** Untested — needs a separate ~1.6GB
+   model download. Only worth it if 2.71x realtime proves too slow in practice.
+2. **Wayland global hotkey.** Tauri-style global grabs don't work. Leading
    candidate: GNOME custom keybinding running a tiny CLI that signals the daemon
    over a unix socket. Verify on this machine before building it.
-4. **miniaudio has no PyInstaller hook; sounddevice does.** Moot given the choice
-   above, but noted.
+3. **`libportaudio2` is not installed on this machine.** `sounddevice` therefore
+   fails at import, so `audio.py` and the full app loop are written but unproven.
+   Needs `sudo apt install libportaudio2` (78KB).
 
 ---
 
@@ -166,19 +193,22 @@ Why this export is unusually good for bare interfacing:
 
 ---
 
-## Planned minimal scope (first milestone)
-
-Nothing but the model working. No daemon, no hotkey, no systemd, no clipboard.
+## Current state of the code
 
 ```
-engine.py    mel → encoder → decode loop → text   (pure; numpy + ort only)
-audio.py     sounddevice capture → 16kHz mono f32
-models.py    download + sha256 verify + extract   (port of salvage script to Python)
-app.py       tkinter box: [● recording] / [… transcribing] / [text + Copy]
+src/voicekey/
+  mel.py       log-mel spectrogram, Whisper-exact   DONE, 10 tests
+  engine.py    encoder + KV-cached decode loop      DONE, verified on real speech
+  cuda.py      NVIDIA library preload               DONE, 4 tests
+  backend.py   provider probe + confirm             DONE, 5 tests
+  paths.py     per-OS model locations               DONE, 3 tests
+  audio.py     sounddevice capture                  WRITTEN, unproven (no PortAudio)
+  ui.py        tkinter popup, thread-safe setters   DONE
+  __main__.py  record → transcribe → show           WRITTEN, unproven
 ```
 
-Run from terminal, button to start/stop. Once the model provably works, the daemon,
-hotkey, and freeze are mechanical additions.
+Still to build: `models.py` (port `salvage/download-whisper-model.sh` to Python
+for cross-platform first-run download), the daemon, the hotkey, and the freeze.
 
 ---
 
