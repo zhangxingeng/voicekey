@@ -164,6 +164,34 @@ cuDNN 9, cuRAND, cuFFT, cuSPARSE, cuSOLVER — ~2GB. Two complications:
   1.30 does not search. `voicekey/cuda.py` dlopens them with `RTLD_GLOBAL`
   before session creation. Without it, CUDA silently never engages.
 
+### Two bugs found by running it on real hardware
+
+**Whisper hallucinates on silence — this needed a gate.** Measured on this
+model: digital silence decodes to `"you"`, room tone to `"."`. Press the hotkey,
+say nothing, get invented text pasted.
+
+The principled fix would be the model's `<|nospeech|>` head, but **this export
+does not produce one** — `P(<|nospeech|>)` measures `0.000000` for silence and
+speech alike, at every token position. So the gate is audio-side (`vad.py`).
+Measured separation on a real mic:
+
+| | rms | crest |
+|---|---|---|
+| room tone | 0.0086 | 1.1 (flat) |
+| speech | 0.1421 | 5.5 (peaky) |
+
+An absolute RMS threshold would encode *this* microphone's gain, so instead the
+noise floor is estimated from the recording itself (10th percentile of 30ms
+frame RMS) and speech is defined relative to it — gain-independent. It also
+skips the decode entirely on silence: 0.01s instead of 5.5s.
+
+**The loopback filter matched nothing.** The same device has two spellings:
+PulseAudio's *description* is `"Monitor of <sink>"` (what `pactl` shows), but
+PortAudio reports the PipeWire *node name*, where it is a `.monitor` **suffix**
+(`alsa_output.usb-....analog-stereo.monitor`). Filtering only the description
+let all 4 monitors through. Both forms are matched now, with tests using the
+real observed strings.
+
 ## Open questions
 
 1. **Is fp16 faster than int8 on CUDA?** Untested — needs a separate ~1.6GB
@@ -171,9 +199,11 @@ cuDNN 9, cuRAND, cuFFT, cuSPARSE, cuSOLVER — ~2GB. Two complications:
 2. **Wayland global hotkey.** Tauri-style global grabs don't work. Leading
    candidate: GNOME custom keybinding running a tiny CLI that signals the daemon
    over a unix socket. Verify on this machine before building it.
-3. **`libportaudio2` is not installed on this machine.** `sounddevice` therefore
-   fails at import, so `audio.py` and the full app loop are written but unproven.
-   Needs `sudo apt install libportaudio2` (78KB).
+3. **Full loop with human speech into the mic is still unverified.** Capture is
+   proven (1.97s of correctly-shaped 16kHz mono f32) and the engine is proven on
+   a speech file, but the two have not been exercised together with a person
+   talking. An acoustic test (play through speakers, record via mic) was
+   inconclusive because the default sink is Bluetooth, so the mic never heard it.
 
 ---
 
@@ -202,10 +232,15 @@ src/voicekey/
   cuda.py      NVIDIA library preload               DONE, 4 tests
   backend.py   provider probe + confirm             DONE, 5 tests
   paths.py     per-OS model locations               DONE, 3 tests
-  audio.py     sounddevice capture                  WRITTEN, unproven (no PortAudio)
+  vad.py       silence gate (adaptive noise floor)  DONE, 9 tests
+  audio.py     mic capture + loopback filter        DONE, 10 tests
   ui.py        tkinter popup, thread-safe setters   DONE
-  __main__.py  record → transcribe → show           WRITTEN, unproven
+  __main__.py  record → transcribe → show           runs; untested with speech
 ```
+
+45 tests. The mel and vad tests pin *invariants* rather than output text,
+because both fail silently: a wrong front-end hallucinates fluently, and a
+wrong gate either drops real speech or lets invented text through.
 
 Still to build: `models.py` (port `salvage/download-whisper-model.sh` to Python
 for cross-platform first-run download), the daemon, the hotkey, and the freeze.

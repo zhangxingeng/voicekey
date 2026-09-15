@@ -18,23 +18,33 @@ import sounddevice as sd
 
 SAMPLE_RATE = 16_000
 
-# PulseAudio/PipeWire expose `Monitor of ...` loopback sources that record
-# system *output*. They enumerate alongside real microphones, so a naive
-# "first input device" pick can silently record the speakers instead of the
-# user. Filter them out of anything shown as a microphone choice.
-_LOOPBACK_MARKERS = ("monitor of", "loopback")
+
+# PulseAudio/PipeWire expose loopback sources that record system *output*.
+# They enumerate alongside real microphones, so a naive "first input device"
+# pick can silently record the speakers instead of the user.
+#
+# The same device appears under two different spellings depending on who is
+# asking: PulseAudio's *description* is "Monitor of <sink>", while PortAudio
+# reports the PipeWire *node name*, where it is a ".monitor" suffix
+# (alsa_output.usb-....analog-stereo.monitor). Both forms must be matched --
+# checking only the description silently lets every monitor through.
+def _is_loopback(name: str) -> bool:
+    lowered = name.lower()
+    return (
+        lowered.startswith("monitor of")
+        or lowered.endswith(".monitor")
+        or ".monitor." in lowered
+        or "loopback" in lowered
+    )
 
 
 def input_devices() -> list[tuple[int, str]]:
     """Real microphones: (index, name), loopback monitors excluded."""
-    out = []
-    for i, dev in enumerate(sd.query_devices()):
-        if dev["max_input_channels"] < 1:
-            continue
-        if any(marker in dev["name"].lower() for marker in _LOOPBACK_MARKERS):
-            continue
-        out.append((i, dev["name"]))
-    return out
+    return [
+        (i, dev["name"])
+        for i, dev in enumerate(sd.query_devices())
+        if dev["max_input_channels"] >= 1 and not _is_loopback(dev["name"])
+    ]
 
 
 class Recorder:

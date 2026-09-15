@@ -33,7 +33,7 @@ import numpy as np
 import onnxruntime as ort
 
 from voicekey import backend as backend_mod
-from voicekey import cuda
+from voicekey import cuda, vad
 from voicekey import mel as mel_mod
 from voicekey.backend import Backend
 
@@ -193,6 +193,13 @@ class Whisper:
         on a boundary can come out mangled; that is the standard trade.
         """
         samples = np.asarray(samples, dtype=np.float32)
+
+        # Gate before decoding, not after: Whisper invents text for silence
+        # ("you" for digital silence, "." for room tone), and this also skips
+        # a pointless multi-second decode. See voicekey.vad.
+        if not vad.has_speech(samples):
+            return Transcription(text="", language=language or "en")
+
         parts: list[str] = []
         detected = language or "en"
 
