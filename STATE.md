@@ -1,27 +1,39 @@
 # Project state — read this first
 
-External memory for the rewrite. Updated as decisions land. If context was
-compacted, this file plus `salvage/NOTES.md` is the whole picture.
+External memory. If context was compacted, this file is the picture.
 
-Last updated: 2026-09-15
+Last updated: 2026-09-18
 
 ---
 
 ## What we're building
 
-A background service. Press a hotkey → a small popup appears and recording starts
-**immediately** (no warm-up). Stop → popup shows it's transcribing → transcribed
-text appears for the user to copy and paste.
+A dictation **app** (not a service). You launch it; it stays open. Press
+Ctrl+Shift+D to start recording, press again to stop. Transcribed text lands in
+an editable box you can fix and copy.
 
-That is the entire product.
-
-- Runs in the background as a service; hotkey-triggered.
-- Recording starts the instant the popup shows.
-- Small popup, clear visual cues per state (recording / transcribing / done).
-- GPU-accelerated Whisper, CPU fallback.
-- One-button install, no user-facing dependency installs.
+- **Recording is instant and never blocks.** It does not wait for the model, the
+  GPU, or a previous transcription. Recording is snappy; transcription can take
+  as long as it needs.
+- **Continuous bursts.** Stop one burst and immediately start another while the
+  first is still decoding. Results append in submission order.
+- **Editable transcript.** You fix Whisper's mistakes in place before copying.
+- **Visual level meter** so a dead or muted mic is visible while you speak.
+- GPU-accelerated Whisper, CPU fallback, one-button install.
 - Explicitly NOT wanted: prompt library, snippets, projects, variables, semantic
   match, self-updater — the old app's entire feature set.
+
+### Open product question
+
+**Is Ctrl+Shift+D global or in-window?** Unresolved, and it decides whether
+`hotkey.py` + `ipc.py` exist at all.
+
+- *In-window*: a Tk binding. Zero extra modules. You must focus the window first.
+- *Global*: GNOME custom keybinding → tiny CLI → unix socket → running app.
+  ~120 lines. Works from anywhere, which is the point of dictation.
+
+Dropping the *daemon* does not force in-window — a GNOME keybinding plus a
+socket is still an app you launch.
 
 ---
 
@@ -32,60 +44,68 @@ split-language architecture.
 
 | Layer | Choice | Why |
 |---|---|---|
-| Runtime | Python 3.14 via uv | uv bundles the interpreter *and* Tk 9.0 — no system Python |
+| Runtime | Python 3.14 via uv | uv's **managed** builds bundle the interpreter *and* Tk 9.0 |
 | Inference | `onnxruntime` / `onnxruntime-gpu`, driven at the bare-graph level | learning goal + real runtime CPU fallback |
 | Numerics | `numpy` | mel spectrogram, tensor glue |
-| Audio | `sounddevice` | industry-standard PortAudio; more widely used than miniaudio |
-| UI | `tkinter` (Tk 9.0) | zero install, bundled by uv, genuinely cross-platform, ~40ms startup |
+| Audio | `sounddevice` | industry-standard PortAudio, official PyInstaller hook |
+| UI | `tkinter` (Tk 9.0) | zero install, bundled by uv, ~335ms cold start |
 | Model dir | `platformdirs` | correct per-OS location |
 | Packaging | PyInstaller via GitHub Actions matrix | AppImage / .app / .exe, zero user deps |
 
 ### Why not the alternatives (don't re-litigate without new evidence)
 
-- **Rust-in-Python (PyO3):** no CPU-bound Python hot loop exists to optimize — the
-  hot loop is ORT (C++). Python overhead is <1% of decode time. Would *create*
-  per-platform wheel-building pain rather than solve it.
-- **Node/Bun:** no numpy (the mel spectrogram is the part we want to learn), much
-  worse audio capture story, Electron for UI. Loses on the two axes that matter.
-- **Split languages (Python engine + other shell):** ships two runtimes plus an IPC
-  bridge and process-lifecycle management. Strictly more complex for a text box.
-- **Whole thing in Rust:** cleanest single-binary install (~70MB vs ~200MB), and
-  honestly acknowledged as such — but the app binary is noise against a 1–3GB
-  model+CUDA download, and it costs the REPL-driven tensor debugging that is the
-  whole point of going bare-metal.
-- **miniaudio instead of sounddevice:** miniaudio needs no system lib at all, but
-  once frozen, PyInstaller bundles PortAudio anyway, so sounddevice's only
-  disadvantage disappears. sounddevice is more widely used and has an official hook.
+- **Rust-in-Python (PyO3):** no CPU-bound Python hot loop exists — the hot loop
+  is ORT (C++). Would *create* per-platform wheel pain rather than solve it.
+- **Node/Bun:** no numpy, worse audio capture, Electron for UI.
+- **Whole thing in Rust:** cleanest single binary, but the app is noise against a
+  1–3GB model download, and it costs REPL-driven tensor debugging.
+- **HTML/JS UI:** there is no "raw HTML" on desktop — you either borrow the OS
+  webview (Linux = WebKitGTK + PyGObject + typelibs; this machine has two
+  incompatible versions installed) or ship Chromium (100MB+). We already deleted
+  a Tauri app that did the former.
+- **Flet / NiceGUI / Reflex:** NiceGUI and Reflex are web servers with a browser
+  in the critical path. Flet bundles the Flutter engine (~60MB) and runs the UI
+  as a second process.
+- **Dear PyGui:** genuinely lighter and faster, but has no native text widget —
+  selection and clipboard would be hand-rolled, and an editable text box is
+  precisely what this app is.
 
 ---
 
 ## Key design rules
 
 **1. The engine is a pure function.** numpy in, text out. No tkinter, no asyncio,
-no daemon imports anywhere in it. This is what makes a future Kotlin/Android port a
-rewrite of the shell rather than the brain — and it costs nothing now.
+no IPC anywhere in it. A future Android port becomes a rewrite of the shell, not
+the brain.
 
-**2. Provider is a runtime probe, never an install-time assumption** — and the
-probe is confirmed against a live session, because ORT degrades to CPU silently.
-See `backend.resolve()` / `backend.confirm()` and finding #2 below.
+**2. Provider is a runtime probe, never an install-time assumption** — confirmed
+against a *live session*, because ORT degrades to CPU silently. See
+`backend.resolve()` / `backend.confirm()` and finding #2 below.
 
-**3. Models are never packaged.** 1–2GB, downloaded on first run into a
-`platformdirs` location, sha256-verified before extraction. GPU runtime rides the
-same first-run flow:
+**3. Models are never packaged.** ~1GB, downloaded on first run into a
+`platformdirs` location, sha256-verified before extraction, temp-then-move so an
+interrupted run cannot leave a half-model.
 
-```
-launch → "Downloading speech model (1.0 GB)" → detects NVIDIA GPU
-       → "Enable GPU acceleration? (+1.6 GB)" → ready
-```
+**4. Recording never waits on anything.** Audio capture opens in ~20ms; a Tk
+window maps in ~50–100ms; the model loads in seconds. Capture starts first and
+bursts queue up even before the model exists.
 
-Ship a modest CPU-only artifact that works for everyone; GPU is an in-app opt-in.
-Better one-button UX than a 3GB installer.
+**5. Inject the expensive dependency.** Every module takes its slow collaborator
+(the model, the network fetcher, the subprocess runner) as an argument with a
+real default. This is why the modules can be built and tested in parallel,
+without a GPU, a network, or a display.
 
-**4. Start audio capture BEFORE mapping the popup window.** Capture open is ~20ms,
-GTK/Tk window map is ~50–100ms. This is what makes "no delay" true.
+**6. Cost is linear in audio length — no cutting needed.** Whisper's encoder is
+O(n²) in sequence length, but its input is *fixed* at 30s / 1500 frames; longer
+audio is chunked at a 30s stride (`engine.py`) and the KV cache makes decode
+linear in tokens. A 5-minute recording costs exactly 10x a 30-second one.
+Quadratic cost only appears with **live partials** (re-decoding a growing
+buffer), which is why we don't do them.
 
-**5. The daemon is mandatory, not a nicety.** CUDA EP session init takes 5–15s
-cold. "Recording starts immediately" is only possible with the model warm in VRAM.
+*Known flaw, deliberately deferred:* the 30s stride can cut a word in half. The
+cheap fix is moving the boundary to the quietest 100ms nearby, not
+overlap-and-stitch (which needs the timestamp tokens we disabled). Most
+dictation bursts never reach 30s.
 
 ---
 
@@ -100,33 +120,22 @@ decoder:  tokens, in_self_k_cache[4,·,448,1280], in_self_v_cache,
 
 Why this export is unusually good for bare interfacing:
 
-- **KV cache is explicitly exposed** (`in_/out_self_k_cache` + `offset`) → decode
-  loop is linear-cost, one token per step. This was the biggest risk; it's resolved.
-- **Encoder emits cross-attention K/V directly**, not raw features → encoder runs
-  once per 30s window, decoder loop is a clean function of (tokens, caches).
+- **KV cache is explicitly exposed** (`in_/out_self_k_cache` + `offset`) → the
+  decode loop is linear-cost, one token per step.
+- **Encoder emits cross-attention K/V directly** → it runs once per 30s window.
 - **All Whisper constants live in encoder metadata**: `sot=50258`, `eot=50257`,
   `transcribe=50360`, `no_timestamps=50364`, `n_mels=128`, `n_text_ctx=448`,
-  `n_vocab=51866`, `sot_sequence=50258,50259,50360`, full language-token table.
+  `n_vocab=51866`, `sot_sequence=50258,50259,50360`, full language table.
   Read them off the file; don't hardcode.
 - **Token table is base64 raw bytes** (`IQ==  0` → `!`). Detokenize = b64decode,
-  concat, utf-8 decode. No GPT-2 byte-BPE dance. File has ids 0..50256; specials
-  are ≥50257 and get filtered.
-- Turbo shape: **32 encoder layers, only 4 decoder layers** — the looped part is tiny.
-
-### Work remaining to implement it (~150–250 lines)
-
-| Piece | Lines | Notes |
-|---|---|---|
-| Log-mel (hann 400, hop 160, 128 mels, log10, clamp, normalize) | ~50 | only real DSP; numpy STFT + mel filterbank |
-| Encoder call | ~5 | trivial |
-| Greedy decode loop w/ KV cache + offset | ~50 | the part worth learning |
-| Prompt construction | ~20 | read from metadata |
-| Detokenize | ~10 | base64 |
-| 30s chunking | ~15 | see salvage/NOTES.md |
+  concat, utf-8 decode. No GPT-2 byte-BPE dance.
+- Turbo shape: **32 encoder layers, only 4 decoder layers** — the looped part is
+  tiny.
+- **Auto-detect language is the empty string**, not `"auto"`.
 
 ---
 
-## Spike results — the engine works (2026-09-15)
+## Measured findings (don't re-derive these)
 
 Benchmarked on the JFK sample (11.0s, 16kHz mono), RTX 3090 Ti:
 
@@ -135,95 +144,67 @@ Benchmarked on the JFK sample (11.0s, 16kHz mono), RTX 3090 Ti:
 | CPU int8 | 8.73s | 1.26x |
 | **CUDA int8** | **4.06s** | **2.71x** |
 
-Output is exact, punctuation included, language auto-detected:
-
-> And so, my fellow Americans, ask not what your country can do for you, ask
-> what you can do for your country.
-
-### Three findings that changed the design
-
 **1. int8-on-CUDA is fine — the fp16 plan was wrong.** The prediction was that
-ORT's CUDA EP would handle quantized ops so badly that int8-on-CUDA would be
-*slower* than int8-on-CPU. Measured, it is **2.15x faster**. So there is now
-**one int8 model for every backend**, which halves the first-run download and
-deletes a whole axis of configuration. Whether fp16 beats int8 on GPU is still
-untested and left as a later optimization.
+ORT's CUDA EP would handle quantized ops so badly that int8-on-CUDA would lose to
+CPU. Measured, it is **2.15x faster**. So there is **one int8 model for every
+backend**, which halves the download and deletes an axis of configuration.
 
 **2. ONNX Runtime falls back to CPU silently.** `get_available_providers()`
 reports what ORT was *built* with, not what it can load. With CUDA libraries
 missing it still listed `CUDAExecutionProvider`, then quietly bound CPU — right
-answers, 2x slower, only a stderr warning. **The UI must read
-`session.get_providers()` after construction**, never the pre-flight probe.
-`backend.confirm()` exists for exactly this.
+answers, 2x slower, only a stderr warning. **Read `session.get_providers()` after
+construction**, never the pre-flight probe.
 
 **3. `onnxruntime-gpu` does not bundle the CUDA runtime.** It needs cuBLAS,
-cuDNN 9, cuRAND, cuFFT, cuSPARSE, cuSOLVER — ~2GB. Two complications:
-- For CUDA 13 these live on **`https://pypi.nvidia.com`**, not PyPI (the PyPI
-  names are redirect stubs). Configured in `[tool.uv] extra-index-url`.
-- CUDA 13 changed the wheel layout to a shared **`nvidia/cu13/lib`**, which ORT
-  1.30 does not search. `voicekey/cuda.py` dlopens them with `RTLD_GLOBAL`
-  before session creation. Without it, CUDA silently never engages.
+cuDNN 9, cuRAND, cuFFT, cuSPARSE, cuSOLVER — ~2GB. For CUDA 13 these live on
+**`https://pypi.nvidia.com`** (the PyPI names are redirect stubs), and CUDA 13
+moved them to a shared **`nvidia/cu13/lib`** that ORT 1.30 does not search.
+`cuda.py` dlopens them with `RTLD_GLOBAL` before session creation.
 
-### Two bugs found by running it on real hardware
-
-**Whisper hallucinates on silence — this needed a gate.** Measured on this
-model: digital silence decodes to `"you"`, room tone to `"."`. Press the hotkey,
-say nothing, get invented text pasted.
-
-The principled fix would be the model's `<|nospeech|>` head, but **this export
-does not produce one** — `P(<|nospeech|>)` measures `0.000000` for silence and
-speech alike, at every token position. So the gate is audio-side (`vad.py`).
-Measured separation on a real mic:
+**4. Whisper hallucinates on silence.** Digital silence decodes to `"you"`, room
+tone to `"."`. The model's `<|nospeech|>` head would be the principled fix, but
+**this export does not produce one** — `P(<|nospeech|>)` is `0.000000` for
+silence and speech alike, at every position. So the gate is audio-side
+(`vad.py`), using a noise floor estimated from the recording itself rather than
+an absolute RMS threshold, which would encode *this* microphone's gain:
 
 | | rms | crest |
 |---|---|---|
 | room tone | 0.0086 | 1.1 (flat) |
 | speech | 0.1421 | 5.5 (peaky) |
 
-An absolute RMS threshold would encode *this* microphone's gain, so instead the
-noise floor is estimated from the recording itself (10th percentile of 30ms
-frame RMS) and speech is defined relative to it — gain-independent. It also
-skips the decode entirely on silence: 0.01s instead of 5.5s.
-
-**The loopback filter matched nothing.** The same device has two spellings:
+**5. The loopback filter matched nothing.** One device, two spellings:
 PulseAudio's *description* is `"Monitor of <sink>"` (what `pactl` shows), but
-PortAudio reports the PipeWire *node name*, where it is a `.monitor` **suffix**
-(`alsa_output.usb-....analog-stereo.monitor`). Filtering only the description
-let all 4 monitors through. Both forms are matched now, with tests using the
-real observed strings.
+PortAudio reports the PipeWire *node name*, where it is a `.monitor` **suffix**.
+Both forms are matched now, with tests using the real observed strings.
 
-## Open questions
-
-1. **Is fp16 faster than int8 on CUDA?** Untested — needs a separate ~1.6GB
-   model download. Only worth it if 2.71x realtime proves too slow in practice.
-2. **Wayland global hotkey.** Tauri-style global grabs don't work. Leading
-   candidate: GNOME custom keybinding running a tiny CLI that signals the daemon
-   over a unix socket. Verify on this machine before building it.
-3. **Full loop with human speech into the mic is still unverified.** Capture is
-   proven (1.97s of correctly-shaped 16kHz mono f32) and the engine is proven on
-   a speech file, but the two have not been exercised together with a person
-   talking. An acoustic test (play through speakers, record via mic) was
-   inconclusive because the default sink is Bluetooth, so the mic never heard it.
+**6. uv bundles Tk only in *managed* builds.** A system interpreter satisfies
+`requires-python` equally well and may have no Tk — Homebrew's `python@3.14`
+splits it into a separate formula, which broke macOS CI. Pinned via
+`python-preference = "only-managed"`, guarded by `tests/test_packaging.py`.
 
 ---
 
-## Build/packaging notes
+## Wayland reality (GNOME 50.1, verified on this machine)
 
-- Build machine (and CI image) needs `libportaudio2` — 78KB apt package. PyInstaller
-  collects the system `.so` into the bundle, so **end users need nothing**.
-  Confirmed by reading `hook-sounddevice.py`.
-- **No in-app `apt install`.** Rejected: needs pkexec/polkit password dialog, is
-  Debian-only, breaks on immutable distros/containers/sandboxes, fails for non-admin
-  users, and contradicts the zero-install goal. The freeze already solves it.
-- Build AppImage on an **older base** (Ubuntu 22.04 / manylinux) — bundling a system
-  `.so` makes glibc compatibility across distros a real concern.
-- macOS gets **CoreML EP inside the standard `onnxruntime` wheel** — Apple Silicon
-  acceleration costs zero packaging effort.
-- `onnxruntime-gpu` is Linux/Windows x86_64 only → belongs in an optional extra.
+| Want | Status |
+|---|---|
+| Global hotkey | ✅ GNOME custom keybinding via `gsettings`. No root, no extension. |
+| Always-on-top | ✅ `root.attributes("-topmost", True)`. |
+| Position window at a screen corner | ❌ Wayland clients cannot position themselves. Needs layer-shell, which GNOME doesn't offer apps and Tk can't speak. |
+| Type into the focused app | ❌ `/dev/uinput` is root-only; `wtype` needs a protocol GNOME doesn't implement. Only route is the RemoteDesktop portal (consent dialog, unproven). **Deferred — clipboard only.** |
 
 ---
 
-## Current state of the code
+## Architecture
+
+One frozen dataclass carries the coordination: `Session` produces `Display`, the
+UI consumes it and knows nothing else — not audio, not numpy, not the model.
+
+The transcript is deliberately **not** in `Display`. The box is editable, so the
+UI owns the text and the session only hands it fragments to append. Otherwise
+every burst finishing mid-edit would have to reconcile against what the user had
+just typed.
 
 ```
 src/voicekey/
@@ -234,53 +215,55 @@ src/voicekey/
   paths.py     per-OS model locations               DONE, 3 tests
   vad.py       silence gate (adaptive noise floor)  DONE, 9 tests
   audio.py     mic capture + loopback filter        DONE, 10 tests
-  ui.py        tkinter popup, thread-safe setters   DONE
-  __main__.py  record → transcribe → show           runs; untested with speech
+  display.py   the Display/State contract           DONE (frozen seam)
+  meter.py     mic level → 0..1, dB-scaled          wave 1
+  models.py    first-run download + verify          wave 1
+  session.py   burst queue, ordering, status        wave 1
+  ui.py        Tk window, meter, editable box       wave 2
+  __main__.py  wiring                               rewrite after wave 2
 ```
 
-45 tests. The mel and vad tests pin *invariants* rather than output text,
-because both fail silently: a wrong front-end hallucinates fluently, and a
-wrong gate either drops real speech or lets invented text through.
-
-Still to build: `models.py` (port `salvage/download-whisper-model.sh` to Python
-for cross-platform first-run download), the daemon, the hotkey, and the freeze.
+The mel and vad tests pin *invariants* rather than output text, because both
+fail silently: a wrong front-end hallucinates fluently, and a wrong gate either
+drops real speech or lets invented text through.
 
 ---
 
-## Already-settled model facts (from the old app, don't re-litigate)
+## Build/packaging notes
 
-- **Whisper large-v3-turbo, not SenseVoice-Small.** SenseVoice mangled English
-  technical jargon ("GitHub" → "GET UP", "Kubernetes" → "CORNATTIE ENGINES").
-  Tested on real voice.
-- **One decode per utterance, no live partials.** Redecoding a growing buffer is
-  quadratic-cost. Cut deliberately.
-- **30-second chunking is mandatory** for utterances over 30s.
-- **Whisper auto-detect language = empty string**, not `"auto"`.
-- **Models already on disk** at `~/.prompt-compose/models/sherpa-onnx-whisper-turbo/`
-  (int8, ~1.0GB). Reuse for CPU testing; fp16 still needs fetching for GPU.
+- Build machine (and CI) needs `libportaudio2` — 78KB apt package. PyInstaller
+  collects the system `.so` into the bundle, so **end users need nothing**.
+- **No in-app `apt install`.** Needs a polkit password dialog, is Debian-only,
+  breaks on immutable distros and containers, and contradicts the zero-install
+  goal. The freeze already solves it.
+- Build the AppImage on an **older base** (Ubuntu 22.04 / manylinux) — bundling a
+  system `.so` makes glibc compatibility a real concern.
+- macOS gets **CoreML EP inside the standard `onnxruntime` wheel** — free.
+- `onnxruntime-gpu` is Linux/Windows x86_64 only → optional extra.
+- **`build.yml` has never been executed.** Freezing is unproven.
 
 ---
 
 ## Machine facts
 
-- Ubuntu, Wayland, GNOME.
+- Ubuntu, Wayland, GNOME Shell 50.1.
 - NVIDIA RTX 3090 Ti 24GB, driver 595.91.07, CUDA 13.2, no system CUDA toolkit.
-- Python 3.14.6 via uv (Tk 9.0 bundled); system Python 3.14.4 (Tk 8.6, GTK4 OK).
-- `uv`, `wl-copy`, `notify-send`, `zenity`, `pw-cat`, `pactl` available.
-- Verified working: `onnxruntime` 1.30.0, `numpy` 2.3.5, `miniaudio` 1.71,
-  `tkinter`/Tk 9.0. `onnxruntime-gpu` 1.30.0 resolves for cp314.
-- Mic is likely `USB Audio Device Mono`. NOTE: most enumerated capture devices are
-  `Monitor of ...` PulseAudio **loopback** sources (system output, not mics) —
-  filter or deprioritize them in any device picker, or the default could silently
-  record the speakers.
-- Old app data in `~/.prompt-compose/` (1.3GB — two models + a dead embedding cache).
+- Python 3.14.6 via uv (Tk 9.0 bundled).
+- Available: `uv`, `wl-copy`, `xclip`, `gsettings`, `dbus-send`, `notify-send`.
+- Absent: `xdotool`, `ydotool`, `wtype`. `/dev/uinput` is root-only.
+- Mic is likely `USB Audio Device Mono`. Most enumerated capture devices are
+  loopback monitors (system output, not mics) — see finding #5.
+- Model on disk at `~/.prompt-compose/models/sherpa-onnx-whisper-turbo/` (int8,
+  ~1.0GB), left by the old app. `__main__.py` falls back to it.
 
 ---
 
-## Repo state
+## Open questions
 
-- Old Tauri+SvelteKit app still present, **not yet deleted**. Recoverable at git tag
-  `pre-rewrite-v0.3.3`.
-- `salvage/` holds the keepers: `download-whisper-model.sh` (working, verified),
-  `reference/{engine,audio,session-state}.rs`, and `NOTES.md`.
-- Deletion of the old app proposed but **not yet approved** — awaiting go-ahead.
+1. **Global vs in-window hotkey** — see top. Blocks wave 2.
+2. **Is fp16 faster than int8 on CUDA?** Untested, needs a separate ~1.6GB
+   download. Only worth it if 2.71x realtime proves too slow in practice.
+3. **RemoteDesktop portal for cursor injection** — unproven, deferred.
+4. **Full loop with human speech into the mic.** Capture is proven, the engine is
+   proven on a speech file, and the GUI has been used successfully — but no
+   automated end-to-end test exists.

@@ -1,34 +1,43 @@
 # voicekey
 
-Hotkey-triggered local speech-to-text. Press a key, speak, get text you can paste.
-Runs entirely on your machine — nothing is uploaded.
+Local dictation. Press a key, speak, get text you can fix and paste. Everything
+runs on your machine — nothing is uploaded.
 
-> **Status: early.** The scaffold, tooling, and packaging are in place. The
-> inference engine is next. See [`STATE.md`](STATE.md) for the full design and
-> every decision made so far.
+> **Status: in progress.** The engine works and transcribes real speech. The
+> hotkey, level meter and continuous recording are being built now. See
+> [`STATE.md`](STATE.md) for the design and every decision made so far.
 
 ## What it does
 
-Press the hotkey → a small popup appears and recording starts immediately →
-stop → the transcription appears, ready to copy.
+Launch it, then press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>D</kbd> to start
+recording and again to stop. The text appears in an editable box — fix whatever
+Whisper got wrong, then copy it.
 
-That is the whole product. No prompt library, no history, no settings sprawl.
+Recording never waits. You can stop one burst and immediately start another
+while the first is still decoding; the results append in order.
+
+That is the whole product. No prompt library, no settings sprawl.
 
 ## How it works
 
-Whisper `large-v3-turbo` driven directly through ONNX Runtime at the graph level —
-log-mel spectrogram, encoder, then a KV-cached autoregressive decode loop. There is
-no wrapper library between the app and the model, which is deliberate: it is about
-250 lines and it is the interesting part.
+Whisper `large-v3-turbo` driven directly through ONNX Runtime at the graph
+level — log-mel spectrogram, encoder, then a KV-cached autoregressive decode
+loop. There is no wrapper library between the app and the model, which is
+deliberate: it is about 250 lines and it is the interesting part.
 
 GPU is used when available and falls back to CPU automatically. The execution
-provider is probed at runtime, not assumed at install time:
+provider is probed at runtime and then **confirmed against the live session**,
+because ONNX Runtime degrades to CPU silently.
 
-| Platform | Accelerator | Weights |
-|---|---|---|
-| Linux / Windows + NVIDIA | CUDA | fp16 |
-| macOS (Apple Silicon) | CoreML | fp16 |
-| anything else | CPU | int8 |
+One int8 model serves every backend. An fp16 build was planned until it was
+measured: int8 on CUDA is 2.15x faster than int8 on CPU, so the second model
+bought nothing and doubled the download.
+
+| Platform | Accelerator |
+|---|---|
+| Linux / Windows + NVIDIA | CUDA |
+| macOS (Apple Silicon) | CoreML |
+| anything else | CPU |
 
 ## Install
 
@@ -36,7 +45,7 @@ Download the artifact for your platform from Releases and run it — no Python, 
 pip, no system packages.
 
 On first run it downloads the speech model (~1.0 GB) into your platform's data
-directory. If an NVIDIA GPU is detected it offers to fetch the CUDA runtime too.
+directory, verifying it before use.
 
 ## Development
 
@@ -68,12 +77,21 @@ uv run pyinstaller --noconfirm --clean --name voicekey --windowed \
 
 ```
 src/voicekey/
-  backend.py   execution-provider probe → providers + quantization
+  mel.py       log-mel spectrogram, Whisper-exact
+  engine.py    encoder + KV-cached decode loop
+  backend.py   execution-provider probe and live confirmation
+  cuda.py      NVIDIA library preload (ORT does not find CUDA 13 on its own)
+  audio.py     microphone capture, loopback filtering
+  vad.py       silence gate — Whisper invents text for silence
+  meter.py     microphone level for the visual cue
+  models.py    first-run model download and verification
+  session.py   burst queue: recording and transcription run independently
+  display.py   the one type the session and the UI agree on
   paths.py     per-OS model/data locations
-  ui.py        the popup (tkinter, behind a 4-method interface)
+  ui.py        the window (tkinter)
   __main__.py  entry point
 salvage/       distilled notes from the previous Tauri/Rust app
-STATE.md       design decisions, open questions, machine facts
+STATE.md       design decisions, measured findings, open questions
 ```
 
 ## License
