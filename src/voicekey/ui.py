@@ -48,6 +48,11 @@ _METER_DEAD = "#e5484d"
 
 _HINT = "Super+Shift+D  record / stop        Ctrl+C  copy        Esc  quit"
 
+# Tk spells the Super key "Mod4"; "Super" is not a modifier name it knows.
+# Both letter cases, because with Shift held X11 reports the keysym as
+# uppercase on some layouts and lowercase on others.
+_TOGGLE_SEQUENCES = ("<Mod4-Shift-D>", "<Mod4-Shift-d>")
+
 _METER_W = 180
 _METER_H = 10
 
@@ -143,15 +148,31 @@ class Popup:
 
         # bind_all, not bind: the text box has focus almost all the time, and a
         # binding on the window alone never fires once a child owns the key.
-        # Both cases: with Shift held, X11 reports the keysym as uppercase on
-        # some layouts and lowercase on others.
-        self.root.bind_all("<Super-Shift-D>", self._on_hotkey)
-        self.root.bind_all("<Super-Shift-d>", self._on_hotkey)
+        self._bind_toggle()
         self.root.bind("<Escape>", self._on_escape)
         self._text.bind("<KeyRelease>", lambda _e: self._refresh_count())
         self.root.protocol("WM_DELETE_WINDOW", self._on_escape)
 
     # -- input -------------------------------------------------------------
+
+    def _bind_toggle(self) -> None:
+        """In-window shortcut, best effort.
+
+        Tk has no "Super" modifier name -- the Super key is Mod4 -- and which
+        keysyms a build accepts varies, so an unrecognised sequence raises
+        TclError at bind time. That must never stop the window from opening:
+        this binding is only a convenience, and the real path is the GNOME
+        grab reaching us over the socket, which works without focus anyway.
+
+        bind_all rather than bind, because the text box holds focus almost all
+        the time and a window-level binding never fires once a child owns
+        the key.
+        """
+        for sequence in _TOGGLE_SEQUENCES:
+            try:
+                self.root.bind_all(sequence, self._on_hotkey)
+            except tk.TclError:
+                continue
 
     def _on_hotkey(self, _event: object) -> str:
         self._on_toggle()

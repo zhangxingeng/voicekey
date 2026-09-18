@@ -30,6 +30,23 @@ from voicekey.ui import Popup
 _METER_MS = 60
 
 
+def _selftest() -> int:
+    """Import everything a real launch needs, then exit.
+
+    This exists for the build: a frozen artifact can be the right size, exit 0
+    from PyInstaller, and still die on its first import because a shared
+    library was not collected. Exit status is the only signal that survives
+    every platform -- a --windowed build on Windows is a GUI-subsystem binary
+    with nowhere to print -- so this reports by status alone and stays silent.
+    """
+    import tkinter  # noqa: F401
+
+    import onnxruntime  # noqa: F401
+    import sounddevice  # noqa: F401
+
+    return 0
+
+
 def _toggle() -> int:
     """The `--toggle` mode: tell the running app to start or stop recording."""
     reply = ipc.send(ipc.TOGGLE)
@@ -64,6 +81,8 @@ def _find_model(on_progress) -> Path:
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    if "--selftest" in argv:
+        return _selftest()
     if "--toggle" in argv:
         return _toggle()
 

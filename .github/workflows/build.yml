@@ -49,19 +49,21 @@ jobs:
         run: uv run python tools/freeze.py
 
       # CI going green on a binary that cannot start is exactly the failure
-      # this whole workflow existed to catch and did not. --toggle exercises
-      # the real import path without needing a display.
+      # this workflow existed to catch and did not. --selftest imports what a
+      # real launch needs and reports by exit status alone: a --windowed build
+      # on Windows is a GUI-subsystem binary with nowhere to print, so nothing
+      # that inspects output works on all three platforms.
       - name: Smoke-test the artifact
         shell: bash
         run: |
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            ./dist/voicekey/voicekey.exe --toggle || true
-            ./dist/voicekey/voicekey.exe --toggle 2>&1 | grep -q "not running"
-          else
-            BIN=./dist/voicekey/voicekey
-            [ -x "$BIN" ] || BIN=./dist/voicekey.app/Contents/MacOS/voicekey
-            "$BIN" --toggle 2>&1 | grep -q "not running"
-          fi
+          case "${{ runner.os }}" in
+            Windows) BIN="dist/voicekey/voicekey.exe" ;;
+            macOS)   BIN="dist/voicekey.app/Contents/MacOS/voicekey" ;;
+            *)       BIN="dist/voicekey/voicekey" ;;
+          esac
+          ls -l "$BIN"
+          "$BIN" --selftest
+          echo "artifact starts and imports cleanly"
 
       - name: Package
         shell: bash
