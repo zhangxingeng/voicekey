@@ -85,3 +85,22 @@ class Recorder:
     def seconds(self) -> float:
         with self._lock:
             return sum(len(b) for b in self._blocks) / SAMPLE_RATE
+
+    def latest(self, frames: int = SAMPLE_RATE // 10) -> np.ndarray:
+        """The most recently captured audio, for the level meter.
+
+        Reads from the tail rather than concatenating everything: the meter is
+        polled several times a second, and by the end of a long recording
+        joining the whole buffer each time would cost more than the decode.
+        """
+        with self._lock:
+            tail: list[np.ndarray] = []
+            total = 0
+            for block in reversed(self._blocks):
+                tail.append(block)
+                total += len(block)
+                if total >= frames:
+                    break
+        if not tail:
+            return np.zeros(0, dtype=np.float32)
+        return np.concatenate(list(reversed(tail)))[-frames:]
