@@ -334,16 +334,43 @@ class TestRegister:
         assert path == path2
         assert fake_gs.bindings[path]["command"] == "echo second"
 
-    def test_register_with_changed_binding_updates_in_place(self, fake_gs):
-        # If we re-register with a different binding, update our entry in place.
+    def test_reregistering_does_not_overwrite_the_users_key(self, fake_gs):
+        """Once the entry exists, the key belongs to the user.
+
+        It is visible and editable in GNOME Settings under Custom Shortcuts,
+        which is where a hotkey is supposed to be changed. Reasserting our
+        default on every launch would silently undo that, and the user would
+        have no way to make a change stick.
+        """
         fake_gs.paths = []
         path = hotkey.register("cmd", binding="<Control>a", run=fake_gs)
-        assert fake_gs.bindings[path]["binding"] == "<Control>a"
 
-        path2 = hotkey.register("cmd", binding="<Control>b", run=fake_gs)
+        # Stand in for the user rebinding it in GNOME Settings.
+        fake_gs.bindings[path]["binding"] = "<Super>x"
+
+        path2 = hotkey.register("cmd", binding="<Control>a", run=fake_gs)
         assert path == path2
-        assert fake_gs.bindings[path]["binding"] == "<Control>b"
+        assert fake_gs.bindings[path]["binding"] == "<Super>x"
         assert len(fake_gs.paths) == 1
+
+    def test_the_command_is_still_refreshed_on_reregister(self, fake_gs):
+        """The binding is the user's; the command is ours.
+
+        It changes between running from a checkout and running a frozen build,
+        and a stale one points the hotkey at a path that no longer exists.
+        """
+        fake_gs.paths = []
+        path = hotkey.register("old/path --toggle", run=fake_gs)
+        hotkey.register("new/path --toggle", run=fake_gs)
+        assert fake_gs.bindings[path]["command"] == "new/path --toggle"
+
+    def test_reset_binding_restores_the_default(self, fake_gs):
+        fake_gs.paths = []
+        path = hotkey.register("cmd", binding="<Control>a", run=fake_gs)
+        fake_gs.bindings[path]["binding"] = "<Super>x"
+
+        hotkey.register("cmd", binding="<Control>a", run=fake_gs, reset_binding=True)
+        assert fake_gs.bindings[path]["binding"] == "<Control>a"
 
     def test_register_preserves_other_bindings_on_reregister(self, fake_gs):
         # When re-registering (idempotency), other users' bindings must still
@@ -474,8 +501,21 @@ class TestGVariantFormatting:
 class TestConstants:
     """Tests that the constants are correctly defined."""
 
-    def test_binding_is_ctrl_shift_d(self):
-        assert hotkey.BINDING == "<Control><Shift>d"
+    def test_default_binding_uses_super(self):
+        """Super is the desktop's modifier and applications do not bind it.
+
+        Any Ctrl/Alt/Shift combination belongs to whatever app has focus, so
+        grabbing one system-wide steals it from that app everywhere -- which is
+        what Ctrl+Shift+D did to browsers and to VS Code.
+        """
+        assert "<Super>" in hotkey.BINDING
+
+    def test_default_binding_avoids_the_grave_key(self):
+        """GNOME binds Super+` and Alt+` to switch-group (spelled Above_Tab),
+        and plain Shift+` is the printable `~` -- grabbing it system-wide would
+        break typing a tilde in every application."""
+        assert "grave" not in hotkey.BINDING.lower()
+        assert "above_tab" not in hotkey.BINDING.lower()
 
     def test_name_is_voicekey_dictation(self):
         assert hotkey.NAME == "voicekey dictation"

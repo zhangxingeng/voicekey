@@ -24,10 +24,19 @@ import re
 import subprocess
 from collections.abc import Callable, Sequence
 
-# The key. Ctrl+Shift+D is free in GNOME's own media-keys on a stock Ubuntu
-# install (checked), though a *global* grab does shadow the app underneath --
-# in browsers this is "bookmark all tabs", in VS Code the debug panel.
-BINDING = "<Control><Shift>d"
+# Super is the desktop's modifier by convention -- the shell owns it and
+# applications are expected not to bind it -- so a global grab here shadows
+# nothing. Every Ctrl/Alt/Shift combination belongs to whatever app has focus,
+# and grabbing one system-wide steals it everywhere: Ctrl+Shift+D was tried
+# first and takes "bookmark all tabs" from browsers and the debug panel from
+# VS Code.
+#
+# The grave key looks tempting and is not: GNOME already binds Super+` and
+# Alt+` to switch-group (spelled `Above_Tab`), and plain Shift+` is the
+# printable `~`, so grabbing it would break typing a tilde in every app.
+#
+# Checked free against every GNOME keybinding schema on this machine.
+BINDING = "<Super><Shift>d"
 
 # How the binding identifies itself in GNOME's Settings UI, and how we find
 # our own entry again among the user's other bindings.
@@ -119,19 +128,34 @@ def find_slot(*, run: RunFn = run_gsettings) -> str | None:
         return None
 
 
-def register(command: str, *, binding: str = BINDING, run: RunFn = run_gsettings) -> str:
-    """Point `binding` at `command`, and return the dconf path used.
+def register(
+    command: str,
+    *,
+    binding: str = BINDING,
+    run: RunFn = run_gsettings,
+    reset_binding: bool = False,
+) -> str:
+    """Ensure our binding exists, and return the dconf path used.
 
     Idempotent: registering twice updates our entry in place rather than
     appending a duplicate. Other users' bindings in the array are preserved
     exactly -- this reads the existing array and appends, never overwrites.
+
+    `binding` is only written when the entry is CREATED. On every later run the
+    command is refreshed (it moves between a checkout and a frozen build) but
+    the key itself is left alone, because by then it belongs to the user: the
+    entry shows up in GNOME Settings under Custom Shortcuts, and that is the
+    place to change it. An app that reasserts its default on each launch
+    silently undoes the user's choice, which is worse than having no default.
+
+    Pass `reset_binding=True` to deliberately restore the default.
     """
-    # Check if we are already registered; if so, update in place.
     path = find_slot(run=run)
     if path:
         run(["set", f"{CHILD_SCHEMA}:{path}", "name", NAME])
-        run(["set", f"{CHILD_SCHEMA}:{path}", "binding", binding])
         run(["set", f"{CHILD_SCHEMA}:{path}", "command", command])
+        if reset_binding:
+            run(["set", f"{CHILD_SCHEMA}:{path}", "binding", binding])
         return path
 
     # Not registered yet: find the lowest unused customN slot.

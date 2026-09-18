@@ -46,7 +46,7 @@ _METER_BG = "#22262e"
 _METER_FG = "#46a758"
 _METER_DEAD = "#e5484d"
 
-_HINT = "Ctrl+Shift+D  record / stop        Ctrl+C  copy        Esc  quit"
+_HINT = "Super+Shift+D  record / stop        Ctrl+C  copy        Esc  quit"
 
 _METER_W = 180
 _METER_H = 10
@@ -143,8 +143,10 @@ class Popup:
 
         # bind_all, not bind: the text box has focus almost all the time, and a
         # binding on the window alone never fires once a child owns the key.
-        self.root.bind_all("<Control-Shift-D>", self._on_hotkey)
-        self.root.bind_all("<Control-Shift-d>", self._on_hotkey)
+        # Both cases: with Shift held, X11 reports the keysym as uppercase on
+        # some layouts and lowercase on others.
+        self.root.bind_all("<Super-Shift-D>", self._on_hotkey)
+        self.root.bind_all("<Super-Shift-d>", self._on_hotkey)
         self.root.bind("<Escape>", self._on_escape)
         self._text.bind("<KeyRelease>", lambda _e: self._refresh_count())
         self.root.protocol("WM_DELETE_WINDOW", self._on_escape)

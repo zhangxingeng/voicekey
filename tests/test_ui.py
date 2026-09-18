@@ -31,7 +31,7 @@ def test_recording_and_idle_are_visually_distinct():
 
 
 def test_hint_names_the_controls():
-    for key in ("Ctrl+Shift+D", "Ctrl+C", "Esc"):
+    for key in ("Super+Shift+D", "Ctrl+C", "Esc"):
         assert key in _HINT
 
 
