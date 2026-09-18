@@ -41,14 +41,27 @@ jobs:
 
       - run: uv sync --dev
 
+      # tools/freeze.py, not a bare pyinstaller call: uv's managed CPython
+      # ships _tkinter.so with no RPATH, so PyInstaller cannot resolve the
+      # Tcl/Tk shared libraries and silently omits them. The build succeeds,
+      # the artifact is the right size, and it dies on its first import.
       - name: Freeze
-        run: >
-          uv run pyinstaller
-          --noconfirm --clean
-          --name voicekey
-          --windowed
-          --collect-binaries sounddevice
-          src/voicekey/__main__.py
+        run: uv run python tools/freeze.py
+
+      # CI going green on a binary that cannot start is exactly the failure
+      # this whole workflow existed to catch and did not. --toggle exercises
+      # the real import path without needing a display.
+      - name: Smoke-test the artifact
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            ./dist/voicekey/voicekey.exe --toggle || true
+            ./dist/voicekey/voicekey.exe --toggle 2>&1 | grep -q "not running"
+          else
+            BIN=./dist/voicekey/voicekey
+            [ -x "$BIN" ] || BIN=./dist/voicekey.app/Contents/MacOS/voicekey
+            "$BIN" --toggle 2>&1 | grep -q "not running"
+          fi
 
       - name: Package
         shell: bash

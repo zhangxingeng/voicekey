@@ -69,7 +69,7 @@ packages = ["src/voicekey"]
 
 [tool.ruff]
 line-length = 100
-src = ["src", "tests"]
+src = ["src", "tests", "tools"]
 
 [tool.ruff.lint]
 select = [
@@ -92,3 +92,6 @@ quote-style = "double"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+# tools/ is build tooling, not a package -- importable from the repo root so
+# tests/test_freeze.py can check the build command without installing it.
+pythonpath = ["."]

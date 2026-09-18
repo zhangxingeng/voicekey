@@ -73,8 +73,7 @@ uv run pytest
 Frozen build (what CI produces):
 
 ```sh
-uv run pyinstaller --noconfirm --clean --name voicekey --windowed \
-  --collect-binaries sounddevice src/voicekey/__main__.py
+uv run python tools/freeze.py
 ```
 
 ## Layout
