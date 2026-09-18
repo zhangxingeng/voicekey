@@ -84,6 +84,13 @@ def main(argv: list[str] | None = None) -> int:
             model = Whisper(model_dir, backend_mod.resolve())
             popup.set_backend(model.backend.label)
             session.set_transcribe(lambda samples: model.transcribe(samples).text)
+            if backend_mod.missing_acceleration(model.backend):
+                # Silently running on CPU next to an idle GPU is only about 2x
+                # slower, which is easy to put up with for weeks without
+                # realising. Say it once, in the place the user is looking.
+                popup.apply(
+                    Display(state="idle", message="GPU found but unused — install the cuda extra")
+                )
         except Exception as exc:
             popup.apply(Display(state="error", message=f"Model failed to load: {exc}"))
 

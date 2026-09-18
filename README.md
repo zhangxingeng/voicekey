@@ -54,9 +54,13 @@ Tk, so there is nothing else to install — except PortAudio on Linux:
 
 ```sh
 sudo apt install libportaudio2      # Linux only, build/dev requirement
-uv sync --dev
+uv sync --extra cuda                # omit --extra cuda for a CPU-only checkout
 uv run voicekey
 ```
+
+`uv sync` on its own installs the CPU build. That still works, it is just
+about twice as slow, and nothing on screen says why -- so the app now warns
+when it finds an NVIDIA driver it is not using.
 
 Checks:
 

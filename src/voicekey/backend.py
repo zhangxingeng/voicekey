@@ -22,6 +22,14 @@ is why this field exists rather than being inlined.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+
+# Present exactly when the NVIDIA kernel driver is loaded. Used only to tell
+# "this machine has no GPU" apart from "this machine has a GPU we failed to
+# use" -- the second deserves to be said out loud, because the app keeps
+# working and is merely 2x slower, which is easy to live with unknowingly for
+# weeks. Installing without the `cuda` extra lands you here silently.
+_NVIDIA_DRIVER = Path("/proc/driver/nvidia/version")
 
 # Ordered best-first. Each entry is (provider name, human label).
 _ACCELERATED: tuple[tuple[str, str], ...] = (
@@ -67,6 +75,21 @@ def resolve(available: list[str] | None = None) -> Backend:
             return Backend(providers=[provider, _CPU], quantization="int8", label=label)
 
     return Backend(providers=[_CPU], quantization="int8", label="CPU")
+
+
+def nvidia_present(driver: Path = _NVIDIA_DRIVER) -> bool:
+    """True when this machine has a loaded NVIDIA driver.
+
+    Linux only, and deliberately so: this exists to catch a wasted GPU on the
+    development machine, not to gate anything. Elsewhere it returns False and
+    nothing is claimed.
+    """
+    return driver.exists()
+
+
+def missing_acceleration(backend: Backend, *, driver: Path = _NVIDIA_DRIVER) -> bool:
+    """True when there is a GPU here that we are not using."""
+    return not backend.accelerated and nvidia_present(driver)
 
 
 def confirm(session_providers: list[str]) -> Backend:
