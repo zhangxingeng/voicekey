@@ -1,16 +1,21 @@
 """UI checks that need no display.
 
 Constructing a Tk window requires an X/Wayland connection, which CI does not
-have, so these cover the parts that are plain data: every state the app can
-enter must have a cue, or `set_state` raises KeyError mid-transcription.
+have, so these cover the parts that are plain data. That is a real limit worth
+naming: the layout, the meter drawing and the append-preserves-caret behaviour
+are only ever exercised by hand.
 """
+
+from __future__ import annotations
 
 from typing import get_args
 
-from voicekey.ui import _CUES, _HINT, State
+from voicekey.display import State
+from voicekey.ui import _CUES, _DEAD_LEVEL, _HINT
 
 
 def test_every_state_has_a_cue():
+    # set_state raises KeyError mid-transcription if one is missing.
     assert set(get_args(State)) == set(_CUES)
 
 
@@ -25,7 +30,16 @@ def test_recording_and_idle_are_visually_distinct():
     assert _CUES["recording"][0] != _CUES["idle"][0]
 
 
-def test_hint_documents_the_only_three_controls():
-    # There are no buttons, so the hint line is the entire discoverable UI.
-    for key in ("Space", "Ctrl+C", "Esc"):
+def test_hint_names_the_controls():
+    for key in ("Ctrl+Shift+D", "Ctrl+C", "Esc"):
         assert key in _HINT
+
+
+def test_dead_level_threshold_is_below_room_tone():
+    """A live-but-quiet mic must not be reported as dead.
+
+    Room tone measures ~0.0086 RMS, which voicekey.meter maps to roughly 0.39
+    on the bar (see tests/test_meter.py). The dead threshold has to sit well
+    under that, or every quiet room looks like a broken microphone.
+    """
+    assert _DEAD_LEVEL < 0.39
